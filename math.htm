@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="zh-TW" class="h-full">
+ <head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Solar System Explorer</title>
+  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+  <script src="https://cdn.jsdelivr.net/npm/lucide@0.263.0/dist/umd/lucide.min.js"></script>
+  <script src="/_sdk/element_sdk.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&amp;display=swap" rel="stylesheet">
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; font-family: 'Outfit', sans-serif; }
+    canvas { display: block; width: 100%; height: 100%; }
+    .glass { background: rgba(10, 12, 30, 0.75); backdrop-filter: blur(12px); border: 1px solid rgba(255,255,255,0.08); }
+    .planet-btn { transition: all 0.2s; }
+    .planet-btn:hover { transform: scale(1.1); }
+    .planet-btn.active { ring: 2px solid white; box-shadow: 0 0 12px currentColor; }
+    .fade-in { animation: fadeIn 0.4s ease; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes pulse { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
+    .pulse { animation: pulse 2s infinite; }
+  </style>
+  <style>body { box-sizing: border-box; }</style>
+  <script src="/_sdk/data_sdk.js" type="text/javascript"></script>
+ <script src="/_sdk/telemetry_sdk.js"></script></head>
+ <body class="h-full bg-black">
+  <canvas id="solarCanvas"></canvas><!-- UI Overlay -->
+  <div id="ui-overlay" class="absolute inset-0 pointer-events-none"><!-- Title -->
+   <div class="absolute top-4 left-4 pointer-events-auto">
+    <h1 id="main-title" class="text-2xl font-bold text-white tracking-wide">太陽系探索者</h1>
+    <p class="text-xs text-gray-400 mt-1">拖曳旋轉 · 滾輪縮放 · 點擊星球查看資訊</p>
+   </div><!-- Planet selector -->
+   <div class="absolute top-4 right-4 pointer-events-auto flex gap-2"><button onclick="focusPlanet('earth')" class="planet-btn w-10 h-10 rounded-full bg-blue-500 border-2 border-blue-300 shadow-lg" title="地球"></button> <button onclick="focusPlanet('moon')" class="planet-btn w-10 h-10 rounded-full bg-gray-400 border-2 border-gray-300 shadow-lg" title="月球"></button> <button onclick="focusPlanet('mars')" class="planet-btn w-10 h-10 rounded-full bg-red-500 border-2 border-red-300 shadow-lg" title="火星"></button>
+   </div><!-- Info Panel -->
+   <div id="info-panel" class="absolute bottom-4 left-4 right-4 md:left-4 md:right-auto md:w-96 glass rounded-xl p-5 pointer-events-auto fade-in hidden">
+    <div class="flex justify-between items-start">
+     <h2 id="info-title" class="text-lg font-semibold text-white"></h2><button onclick="closeInfo()" class="text-gray-400 hover:text-white"><i data-lucide="x" style="width:18px;height:18px;"></i></button>
+    </div>
+    <div id="info-body" class="mt-3 text-sm text-gray-300 leading-relaxed"></div>
+   </div><!-- Controls hint -->
+   <div class="absolute bottom-4 right-4 pointer-events-auto glass rounded-lg px-3 py-2 text-xs text-gray-400 hidden md:block"><span class="pulse inline-block w-2 h-2 rounded-full bg-green-400 mr-2"></span>即時模擬中
+   </div><!-- Speed control -->
+   <div class="absolute top-16 left-4 pointer-events-auto glass rounded-lg px-3 py-2 flex items-center gap-2"><span class="text-xs text-gray-400">速度</span> <input id="speed-slider" type="range" min="0" max="5" step="0.1" value="1" class="w-20 accent-blue-400"> <span id="speed-val" class="text-xs text-white w-6">1x</span>
+   </div><!-- Pause Button -->
+   <div class="absolute top-16 right-4 pointer-events-auto"><button id="pause-btn" onclick="togglePause()" class="flex items-center gap-2 bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white font-semibold px-4 py-2 rounded-lg shadow-lg transition-all duration-200 transform hover:scale-105 active:scale-95"> <i id="pause-icon" data-lucide="pause" style="width:20px;height:20px;"></i> <span id="pause-text">暫停</span> </button>
+   </div>
+  </div>
+  <script>
+    // Config & SDK
+    const defaultConfig = {
+      main_title: '太陽系探索者',
+      info_label: '軌道力學',
+      background_color: '#060610',
+      surface_color: '#0a0c1e',
+      text_color: '#e2e8f0',
+      primary_color: '#3b82f6',
+      accent_color: '#f97316',
+      font_family: 'Outfit',
+      font_size: 16
+    };
+
+    let config = { ...defaultConfig };
+
+    function applyConfig(c) {
+      config = { ...defaultConfig, ...c };
+      document.getElementById('main-title').textContent = config.main_title;
+      document.body.style.fontFamily = `${config.font_family}, Outfit, sans-serif`;
+    }
+
+    window.elementSdk.init({
+      defaultConfig,
+      onConfigChange: async (c) => applyConfig(c),
+      mapToCapabilities: (c) => ({
+        recolorables: [
+          { get: () => c.background_color || defaultConfig.background_color, set: v => { c.background_color = v; window.elementSdk.setConfig({ background_color: v }); } },
+          { get: () => c.surface_color || defaultConfig.surface_color, set: v => { c.surface_color = v; window.elementSdk.setConfig({ surface_color: v }); } },
+          { get: () => c.text_color || defaultConfig.text_color, set: v => { c.text_color = v; window.elementSdk.setConfig({ text_color: v }); } },
+          { get: () => c.primary_color || defaultConfig.primary_color, set: v => { c.primary_color = v; window.elementSdk.setConfig({ primary_color: v }); } },
+          { get: () => c.accent_color || defaultConfig.accent_color, set: v => { c.accent_color = v; window.elementSdk.setConfig({ accent_color: v }); } }
+        ],
+        borderables: [],
+        fontEditable: { get: () => c.font_family || defaultConfig.font_family, set: v => { c.font_family = v; window.elementSdk.setConfig({ font_family: v }); } },
+        fontSizeable: { get: () => c.font_size || defaultConfig.font_size, set: v => { c.font_size = v; window.elementSdk.setConfig({ font_size: v }); } }
+      }),
+      mapToEditPanelValues: (c) => new Map([
+        ['main_title', c.main_title || defaultConfig.main_title],
+        ['info_label', c.info_label || defaultConfig.info_label]
+      ])
+    });
+
+    // 3D Solar System
+    const canvas = document.getElementById('solarCanvas');
+    const ctx = canvas.getContext('2d');
+
+    let W, H;
+    function resize() { W = canvas.width = window.innerWidth; H = canvas.height = window.innerHeight; }
+    resize();
+    window.addEventListener('resize', resize);
+
+    // Camera
+    let camRotX = 0.4, camRotY = 0, camDist = 600;
+    let dragging = false, lastMX, lastMY;
+
+    canvas.addEventListener('mousedown', e => { dragging = true; lastMX = e.clientX; lastMY = e.clientY; });
+    canvas.addEventListener('mousemove', e => {
+      if (!dragging) return;
+      camRotY += (e.clientX - lastMX) * 0.005;
+      camRotX += (e.clientY - lastMY) * 0.005;
+      camRotX = Math.max(-1.4, Math.min(1.4, camRotX));
+      lastMX = e.clientX; lastMY = e.clientY;
+    });
+    canvas.addEventListener('mouseup', () => dragging = false);
+    canvas.addEventListener('mouseleave', () => dragging = false);
+    canvas.addEventListener('wheel', e => { camDist += e.deltaY * 0.5; camDist = Math.max(200, Math.min(1500, camDist)); e.preventDefault(); }, { passive: false });
+
+    // Touch
+    canvas.addEventListener('touchstart', e => { if (e.touches.length === 1) { dragging = true; lastMX = e.touches[0].clientX; lastMY = e.touches[0].clientY; } });
+    canvas.addEventListener('touchmove', e => {
+      if (!dragging || e.touches.length !== 1) return;
+      camRotY += (e.touches[0].clientX - lastMX) * 0.005;
+      camRotX += (e.touches[0].clientY - lastMY) * 0.005;
+      camRotX = Math.max(-1.4, Math.min(1.4, camRotX));
+      lastMX = e.touches[0].clientX; lastMY = e.touches[0].clientY;
+      e.preventDefault();
+    }, { passive: false });
+    canvas.addEventListener('touchend', () => dragging = false);
+
+    // Project 3D -> 2D
+    function project(x, y, z) {
+      const cosY = Math.cos(camRotY), sinY = Math.sin(camRotY);
+      const cosX = Math.cos(camRotX), sinX = Math.sin(camRotX);
+      let x1 = x * cosY - z * sinY;
+      let z1 = x * sinY + z * cosY;
+      let y1 = y * cosX - z1 * sinX;
+      let z2 = y * sinX + z1 * cosX;
+      const scale = camDist / (camDist + z2);
+      return { x: W / 2 + x1 * scale, y: H / 2 + y1 * scale, scale, z: z2 };
+    }
+
+    // Stars
+    const stars = Array.from({ length: 300 }, () => ({
+      x: (Math.random() - 0.5) * 3000,
+      y: (Math.random() - 0.5) * 3000,
+      z: (Math.random() - 0.5) * 3000,
+      brightness: Math.random()
+    }));
+
+    // Planet data (scaled for visual appeal)
+    const planets = {
+      sun: { radius: 50, color: '#FDB813', orbitR: 0, speed: 0, angle: 0, x: 0, y: 0, z: 0 },
+      earth: { radius: 18, color: '#4A90D9', orbitR: 200, speed: 0.3, angle: 0, x: 0, y: 0, z: 0, tilt: 0.05 },
+      moon: { radius: 6, color: '#C0C0C0', orbitR: 35, speed: 2.5, angle: 0, parent: 'earth', x: 0, y: 0, z: 0 },
+      mars: { radius: 12, color: '#CD5C5C', orbitR: 320, speed: 0.16, angle: Math.PI * 0.7, x: 0, y: 0, z: 0, tilt: 0.03 }
+    };
+
+    const planetInfo = {
+      earth: {
+        name: '🌍 地球',
+        facts: `<p><b>軌道半徑：</b>1 AU（1.496 億公里）</p><p><b>公轉週期：</b>365.25 天</p><p><b>自轉傾斜：</b>23.4°</p><p class="mt-2 text-blue-300">地球以橢圓軌道繞太陽運行，受萬有引力束縛。軌道速度約 29.78 km/s，向心加速度與太陽引力完美平衡。</p>`
+      },
+      moon: {
+        name: '🌙 月球',
+        facts: `<p><b>軌道半徑：</b>384,400 公里</p><p><b>公轉週期：</b>27.3 天</p><p><b>相對地球距離：</b>約 30 倍地球直徑</p><p class="mt-2 text-blue-300">月球被地球的引力場俘獲，同步自轉使同一面永遠面向地球。潮汐力正緩慢將月球推離地球（每年 3.8 cm）。</p>`
+      },
+      mars: {
+        name: '🔴 火星',
+        facts: `<p><b>軌道半徑：</b>1.524 AU（2.279 億公里）</p><p><b>公轉週期：</b>687 天</p><p><b>與地球距離：</b>0.52 ~ 2.52 AU</p><p class="mt-2 text-blue-300">根據克卜勒第三定律，火星離太陽較遠，軌道速度較慢（24.07 km/s）。火星的軌道離心率較高（0.093），使其軌道明顯非圓形。</p>`
+      }
+    };
+
+    let timeSpeed = 1;
+    let time = 0;
+    let focusTarget = null;
+    let isPaused = false;
+
+    document.getElementById('speed-slider').addEventListener('input', e => {
+      timeSpeed = parseFloat(e.target.value);
+      document.getElementById('speed-val').textContent = timeSpeed.toFixed(1) + 'x';
+    });
+
+    function togglePause() {
+      isPaused = !isPaused;
+      const btn = document.getElementById('pause-btn');
+      const icon = document.getElementById('pause-icon');
+      const text = document.getElementById('pause-text');
+      
+      if (isPaused) {
+        btn.classList.add('ring-2', 'ring-blue-300');
+        icon.setAttribute('data-lucide', 'play');
+        text.textContent = '繼續';
+      } else {
+        btn.classList.remove('ring-2', 'ring-blue-300');
+        icon.setAttribute('data-lucide', 'pause');
+        text.textContent = '暫停';
+      }
+      lucide.createIcons();
+    }
+
+    function focusPlanet(name) {
+      focusTarget = name;
+      const info = planetInfo[name];
+      if (info) {
+        const panel = document.getElementById('info-panel');
+        document.getElementById('info-title').textContent = info.name;
+        document.getElementById('info-body').innerHTML = info.facts;
+        panel.classList.remove('hidden');
+      }
+    }
+
+    function closeInfo() {
+      document.getElementById('info-panel').classList.add('hidden');
+      focusTarget = null;
+    }
+
+    // Click detection
+    canvas.addEventListener('click', e => {
+      const rect = canvas.getBoundingClientRect();
+      const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+      for (const [name, p] of Object.entries(planets)) {
+        if (name === 'sun') continue;
+        const proj = project(p.x, p.y, p.z);
+        const r = p.radius * proj.scale;
+        if (Math.hypot(mx - proj.x, my - proj.y) < r + 10) {
+          focusPlanet(name);
+          return;
+        }
+      }
+    });
+
+    // Draw
+    function drawOrbit(centerX, centerY, centerZ, radius, tilt = 0) {
+      ctx.beginPath();
+      for (let i = 0; i <= 64; i++) {
+        const a = (i / 64) * Math.PI * 2;
+        const ox = centerX + Math.cos(a) * radius;
+        const oy = centerY + Math.sin(a) * radius * Math.sin(tilt || 0.01);
+        const oz = centerZ + Math.sin(a) * radius * Math.cos(tilt || 0.01);
+        const p = project(ox, oy, oz);
+        if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+      }
+      ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+
+    function drawBody(planet, glow = false) {
+      const p = project(planet.x, planet.y, planet.z);
+      const r = Math.max(2, planet.radius * p.scale);
+
+      if (glow) {
+        const grad = ctx.createRadialGradient(p.x, p.y, r * 0.5, p.x, p.y, r * 3);
+        grad.addColorStop(0, planet.color + 'cc');
+        grad.addColorStop(1, 'transparent');
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, r * 3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Sphere shading
+      const grad2 = ctx.createRadialGradient(p.x - r * 0.3, p.y - r * 0.3, r * 0.1, p.x, p.y, r);
+      grad2.addColorStop(0, '#ffffff44');
+      grad2.addColorStop(0.5, planet.color);
+      grad2.addColorStop(1, '#00000088');
+      ctx.fillStyle = grad2;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+      ctx.fill();
+
+      return p;
+    }
+
+    function animate() {
+      if (!isPaused) {
+        time += 0.016 * timeSpeed;
+      }
+      ctx.fillStyle = '#060610';
+      ctx.fillRect(0, 0, W, H);
+
+      // Stars
+      for (const s of stars) {
+        const p = project(s.x, s.y, s.z);
+        if (p.z < -camDist) continue;
+        ctx.fillStyle = `rgba(255,255,255,${s.brightness * 0.6})`;
+        ctx.fillRect(p.x, p.y, 1.2, 1.2);
+      }
+
+      // Update positions
+      planets.earth.angle = time * planets.earth.speed;
+      planets.earth.x = Math.cos(planets.earth.angle) * planets.earth.orbitR;
+      planets.earth.z = Math.sin(planets.earth.angle) * planets.earth.orbitR;
+      planets.earth.y = Math.sin(planets.earth.angle) * planets.earth.orbitR * planets.earth.tilt;
+
+      planets.moon.angle = time * planets.moon.speed;
+      planets.moon.x = planets.earth.x + Math.cos(planets.moon.angle) * planets.moon.orbitR;
+      planets.moon.z = planets.earth.z + Math.sin(planets.moon.angle) * planets.moon.orbitR;
+      planets.moon.y = planets.earth.y + Math.sin(planets.moon.angle) * 5;
+
+      planets.mars.angle = time * planets.mars.speed;
+      planets.mars.x = Math.cos(planets.mars.angle) * planets.mars.orbitR;
+      planets.mars.z = Math.sin(planets.mars.angle) * planets.mars.orbitR;
+      planets.mars.y = Math.sin(planets.mars.angle) * planets.mars.orbitR * planets.mars.tilt;
+
+      // Draw orbits
+      drawOrbit(0, 0, 0, planets.earth.orbitR, planets.earth.tilt);
+      drawOrbit(0, 0, 0, planets.mars.orbitR, planets.mars.tilt);
+      drawOrbit(planets.earth.x, planets.earth.y, planets.earth.z, planets.moon.orbitR);
+
+      // Sort by z for depth
+      const bodies = Object.entries(planets).map(([n, p]) => ({ name: n, ...p, projZ: project(p.x, p.y, p.z).z }));
+      bodies.sort((a, b) => b.projZ - a.projZ);
+
+      for (const b of bodies) {
+        drawBody(planets[b.name], b.name === 'sun');
+      }
+
+      // Focus camera smoothly
+      if (focusTarget && planets[focusTarget]) {
+        const t = planets[focusTarget];
+        // gentle camera pull not implemented to keep controls free
+      }
+
+      requestAnimationFrame(animate);
+    }
+
+    animate();
+    lucide.createIcons();
+  </script>
+ <script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a06c3e7f6b1e4679',t:'MTc4MDYzMTc1MQ=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+</html>
